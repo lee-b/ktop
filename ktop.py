@@ -201,7 +201,7 @@ def _sparkline(values, width: int | None = None) -> str:
 
 def _fmt_bytes(b: float) -> str:
     mb = b / 1024**2
-    if mb >= 1024:
+    if mb >= 1000:
         return f"{mb / 1024:.1f} GB"
     return f"{mb:.1f} MB"
 
