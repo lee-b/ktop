@@ -21,13 +21,13 @@ A terminal-based system resource monitor built for tracking resource usage when 
 
 ```bash
 # Install with uv (recommended)
-uv tool install --from=https://github.com/brontoguana/ktop
+uv tool install --from=git+https://github.com/brontoguana/ktop ktop
 ```
 
-Or run directly without installing:
+Or run directly without (separately) installing:
 
 ```bash
-uvx git+https://github.com/brontoguana/ktop
+uvx --from=git+https://github.com/brontoguana/ktop ktop
 ```
 
 **Note:** `uvx` is included with [`uv`](https://astral.sh/uv). See the uv documentation for installation instructions.
