@@ -4,7 +4,7 @@
 
 A terminal-based system resource monitor built for tracking resource usage when running hybrid LLM workloads.
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
 
 ## Features
 
@@ -51,7 +51,7 @@ ktop --theme "Tokyo Night"
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.8+
 - NVIDIA GPU + drivers (optional — CPU/memory monitoring works without a GPU)
 - Dependencies: `psutil`, `rich`, `pynvml`
 
