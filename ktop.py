@@ -2,12 +2,17 @@
 """ktop - Terminal system resource monitor for hybrid LLM workloads."""
 
 import argparse
+import os
+import select
 import signal
 import sys
+import termios
 import time
+import tty
 from collections import deque
 
 import psutil
+from rich.columns import Columns
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -158,7 +163,8 @@ class KTop:
         return procs[:n]
 
     # ── panel builders ───────────────────────────────────────────────────
-    def _gpu_panel(self) -> Panel:
+    def _gpu_panels(self) -> Layout:
+        """Return a horizontal Layout with one panel per GPU."""
         gpus = self._gpu_info()
         if not gpus:
             return Panel(
@@ -167,23 +173,33 @@ class KTop:
                 border_style="magenta",
             )
 
-        parts: list[str] = []
+        gpu_layout = Layout()
+        children = []
         for g in gpus:
             uc = _color_for(g["util"])
             mc = _color_for(g["mem_pct"])
-            spark_u = _sparkline(self.gpu_util_hist[g["id"]])
-            spark_m = _sparkline(self.gpu_mem_hist[g["id"]])
-            parts.append(
-                f"[bold]GPU {g['id']}[/bold] [dim]{g['name']}[/dim]\n"
-                f"  Util  {_bar(g['util'])} [{uc}]{g['util']:5.1f}%[/{uc}]  {spark_u}\n"
-                f"  Mem   {_bar(g['mem_pct'])} [{mc}]{g['mem_used_gb']:.1f}/{g['mem_total_gb']:.1f} GB[/{mc}]  {spark_m}"
+            spark_u = _sparkline(self.gpu_util_hist[g["id"]], width=20)
+            spark_m = _sparkline(self.gpu_mem_hist[g["id"]], width=20)
+            body = (
+                f"[bold]Util[/bold] {_bar(g['util'], 15)} [{uc}]{g['util']:5.1f}%[/{uc}]\n"
+                f"      {spark_u}\n"
+                f"[bold]Mem [/bold] {_bar(g['mem_pct'], 15)} [{mc}]{g['mem_pct']:5.1f}%[/{mc}]\n"
+                f"      {g['mem_used_gb']:.1f}/{g['mem_total_gb']:.1f} GB\n"
+                f"      {spark_m}"
             )
+            name_short = g["name"].replace("NVIDIA ", "").replace(" Generation", "")
+            panel = Panel(
+                Text.from_markup(body),
+                title=f"[bold magenta] GPU {g['id']} [/bold magenta]",
+                subtitle=f"[dim]{name_short}[/dim]",
+                border_style="magenta",
+            )
+            child = Layout(name=f"gpu{g['id']}", ratio=1)
+            child.update(panel)
+            children.append(child)
 
-        return Panel(
-            Text.from_markup("\n".join(parts)),
-            title="[bold magenta] GPU Utilization & Memory [/bold magenta]",
-            border_style="magenta",
-        )
+        gpu_layout.split_row(*children)
+        return gpu_layout
 
     def _cpu_panel(self) -> Panel:
         pct = self._sample_cpu()
@@ -271,7 +287,7 @@ class KTop:
             Layout(name="cpu_procs", ratio=1),
         )
 
-        layout["gpu"].update(self._gpu_panel())
+        layout["gpu"].update(self._gpu_panels())
         layout["cpu"].update(self._cpu_panel())
         layout["mem"].update(self._mem_panel())
         layout["mem_procs"].update(self._proc_table("memory_percent"))
@@ -279,28 +295,57 @@ class KTop:
 
         return layout
 
+    # ── keyboard helpers ────────────────────────────────────────────────
+    @staticmethod
+    def _key_pressed() -> str | None:
+        """Return a key character if one is waiting on stdin, else None."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            # ESC could be standalone or start of an escape sequence
+            if ch == "\x1b":
+                # Read any remaining escape sequence bytes and discard
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    sys.stdin.read(1)
+                return "ESC"
+            return ch
+        return None
+
     # ── run loop ─────────────────────────────────────────────────────────
     def run(self) -> None:
-        def _quit(*_):
+        def _cleanup():
             if self.gpu_ok:
                 try:
                     nvmlShutdown()
                 except Exception:
                     pass
+
+        def _quit(*_):
+            _cleanup()
             sys.exit(0)
 
         signal.signal(signal.SIGINT, _quit)
         signal.signal(signal.SIGTERM, _quit)
 
-        with Live(
-            self._build(),
-            console=self.console,
-            screen=True,
-            refresh_per_second=int(1 / self.refresh),
-        ) as live:
-            while True:
-                time.sleep(self.refresh)
-                live.update(self._build())
+        # Put terminal in raw mode so we can read single key presses
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            with Live(
+                self._build(),
+                console=self.console,
+                screen=True,
+                refresh_per_second=int(1 / self.refresh),
+            ) as live:
+                while True:
+                    time.sleep(self.refresh)
+                    key = self._key_pressed()
+                    if key in ("q", "Q", "ESC"):
+                        break
+                    live.update(self._build())
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            _cleanup()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

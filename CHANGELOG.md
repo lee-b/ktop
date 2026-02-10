@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-02-10
+
+- GPU panels now laid out horizontally — all GPUs visible side by side
+- Added q and ESC keys to quit the app (in addition to Ctrl+C)
+- Tested: horizontal layout renders correctly with 3 GPUs at 140-col width
+
 ## 0.1.1 — 2026-02-10
 
 - Added `setup.sh` installer script — installs `ktop` as a command to `~/.local/bin` (or `/usr/local/bin` with `--system`)
