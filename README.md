@@ -1,5 +1,7 @@
 # ktop
 
+![ktop screenshot](screenshot.png?v=2)
+
 A terminal-based system resource monitor built for tracking resource usage when running hybrid LLM workloads.
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -14,10 +16,6 @@ A terminal-based system resource monitor built for tracking resource usage when 
 - **50 Color Themes** — Press `t` to browse and switch themes with live preview; persists across sessions
 - **Gradient Bar Charts** — Smooth per-block color gradients from low to high across all bars
 - **Responsive UI** — 50ms input polling for snappy keyboard navigation
-
-## Screenshot
-
-![ktop screenshot](screenshot.png?v=2)
 
 ## Install
 
