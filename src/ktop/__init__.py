@@ -46,6 +46,42 @@ HISTORY_LEN = 300
 CONFIG_DIR = Path.home() / ".config" / "ktop"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+# ── benchmarking ───────────────────────────────────────────────────────────────
+class _Benchmark:
+    """Simple benchmarking collector."""
+    def __init__(self):
+        self.data: dict[str, list[float]] = {}
+        self._starts: dict[str, float] = {}
+
+    def start(self, name: str) -> None:
+        self._starts[name] = time.perf_counter()
+
+    def stop(self, name: str) -> None:
+        if name in self._starts:
+            elapsed = time.perf_counter() - self._starts.pop(name)
+            self.data.setdefault(name, []).append(elapsed)
+
+    def reset(self) -> None:
+        self.data.clear()
+        self._starts.clear()
+
+    def report(self) -> str:
+        if not self.data:
+            return "No benchmark data collected."
+        lines = ["Benchmark Results:", "-" * 80]
+        # Header
+        lines.append(f"{'Operation':<30} {'Calls':>10} {'Total (s)':>12} {'Avg (ms)':>12} {'% of time':>12}")
+        total_all = sum(sum(vals) for vals in self.data.values())
+        for name in sorted(self.data.keys()):
+            vals = self.data[name]
+            count = len(vals)
+            total = sum(vals)
+            avg = total / count * 1000 if count else 0
+            pct = (total / total_all * 100) if total_all else 0
+            lines.append(f"{name:<30} {count:>10} {total:>12.3f} {avg:>12.3f} {pct:>12.1f}%")
+        return "\n".join(lines)
+
+
 # ── themes ───────────────────────────────────────────────────────────────────
 # Each theme: (gpu, cpu, mem, proc_mem, proc_cpu, bar_low, bar_mid, bar_high)
 THEMES: dict[str, dict] = {}
@@ -153,8 +189,10 @@ def _lerp_rgb(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) -> s
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _bar(pct: float, width: int = 25, theme: dict | None = None) -> str:
+def _bar(pct: float, width: int = 25, theme: dict | None = None, bench: _Benchmark | None = None) -> str:
     """Render a smooth gradient progress bar as Rich markup."""
+    if bench:
+        bench.start("_bar_gradient")
     filled = int(pct / 100 * width)
     empty = width - filled
     rgb_lo = _color_to_rgb(theme["bar_low"] if theme else "green")
@@ -167,6 +205,8 @@ def _bar(pct: float, width: int = 25, theme: dict | None = None) -> str:
         parts.append(f"[{c}]█[/{c}]")
     if empty:
         parts.append(f"[dim]{'░' * empty}[/dim]")
+    if bench:
+        bench.stop("_bar_gradient")
     return "".join(parts)
 
 
@@ -248,9 +288,10 @@ def _read_key() -> str | None:
 
 # ── main monitor ─────────────────────────────────────────────────────────────
 class KTop:
-    def __init__(self, refresh: float = 1.0):
+    def __init__(self, refresh: float = 1.0, benchmark: _Benchmark | None = None):
         self.refresh = refresh
         self.console = Console()
+        self.benchmark = benchmark
 
         # theme
         cfg = _load_config()
@@ -321,8 +362,12 @@ class KTop:
         return up, down
 
     def _gpu_info(self) -> list[dict]:
+        if self.benchmark:
+            self.benchmark.start("_gpu_info")
         gpus = []
         if not self.gpu_ok:
+            if self.benchmark:
+                self.benchmark.stop("_gpu_info")
             return gpus
         for i in range(self.gpu_count):
             try:
@@ -347,9 +392,14 @@ class KTop:
                 )
             except Exception:
                 pass
+        if self.benchmark:
+            self.benchmark.stop("_gpu_info")
         return gpus
 
-    def _top_procs(self, key: str, n: int = 10) -> list[dict]:
+    def _top_procs(self, n: int = 10) -> tuple[list[dict], list[dict]]:
+        """Collect processes and return top N by CPU and top N by Memory in a single pass."""
+        if self.benchmark:
+            self.benchmark.start("_top_procs")
         procs = []
         for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "memory_info"]):
             try:
@@ -359,8 +409,14 @@ class KTop:
                 procs.append(info)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        procs.sort(key=lambda x: x.get(key, 0) or 0, reverse=True)
-        return procs[:n]
+        # Single sort: we need both top CPU and top Memory
+        # Since we need both, we still need two sorts (can't get both from one sort)
+        # But we can at least avoid iterating processes twice
+        cpu_sorted = sorted(procs, key=lambda x: x.get("cpu_percent", 0) or 0, reverse=True)[:n]
+        mem_sorted = sorted(procs, key=lambda x: x.get("memory_percent", 0) or 0, reverse=True)[:n]
+        if self.benchmark:
+            self.benchmark.stop("_top_procs")
+        return cpu_sorted, mem_sorted
 
     # ── panel builders ───────────────────────────────────────────────────
     def _gpu_panels(self) -> Layout:
@@ -492,10 +548,8 @@ class KTop:
             border_style=t["mem"],
         )
 
-    def _proc_table(self, by: str) -> Panel:
+    def _proc_table(self, procs: list[dict], is_mem: bool) -> Panel:
         t = self.theme
-        is_mem = by == "memory_percent"
-        procs = self._top_procs(by)
         title = "Top Processes by Memory" if is_mem else "Top Processes by CPU"
         colour = t["proc_mem"] if is_mem else t["proc_cpu"]
 
@@ -665,8 +719,10 @@ class KTop:
         layout["net"].update(self._net_panel())
         layout["cpu"].update(self._cpu_panel())
         layout["mem"].update(self._mem_panel())
-        layout["mem_procs"].update(self._proc_table("memory_percent"))
-        layout["cpu_procs"].update(self._proc_table("cpu_percent"))
+        # Get both top process lists in a single pass
+        cpu_top, mem_top = self._top_procs()
+        layout["mem_procs"].update(self._proc_table(mem_top, is_mem=True))
+        layout["cpu_procs"].update(self._proc_table(cpu_top, is_mem=False))
         layout["status"].update(self._status_bar())
 
         return layout
@@ -715,7 +771,9 @@ class KTop:
 
         def _quit(*_):
             _cleanup()
-            sys.exit(0)
+            if self.benchmark:
+                print("\n" + self.benchmark.report())
+                sys.exit(0)
 
         signal.signal(signal.SIGINT, _quit)
         signal.signal(signal.SIGTERM, _quit)
@@ -759,13 +817,25 @@ def main():
         "--theme", type=str, default=None,
         help=f"Color theme (see theme picker with 't' key)",
     )
+    parser.add_argument(
+        "--benchmark", type=float, default=None,
+        help="Run benchmark for N seconds, then exit with report",
+    )
     args = parser.parse_args()
 
-    k = KTop(refresh=args.refresh)
+    bench = _Benchmark() if args.benchmark else None
+    k = KTop(refresh=args.refresh, benchmark=bench)
     if args.theme and args.theme in THEMES:
         k.theme_name = args.theme
         k.theme = THEMES[args.theme]
-    k.run()
+    if bench is not None:
+        # Benchmark mode: run for the specified number of seconds
+        end_time = time.time() + args.benchmark
+        while time.time() < end_time:
+            k._build()
+        print("\n" + bench.report())
+    else:
+        k.run()
 
 
 if __name__ == "__main__":
