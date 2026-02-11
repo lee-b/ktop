@@ -1,0 +1,2 @@
+usage: ktop [-h] [-r REFRESH] [--theme THEME]
+ktop: error: unrecognized arguments: --benchmark 15
